@@ -1,0 +1,247 @@
+---
+title: "project1"
+author: "Nivashini Nattudurai"
+date: "2023-07-18"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(gtsummary)
+library(ggplot2)
+library(rsample)
+library(dbplyr)
+library(neuralnet)
+library(keras)
+library(glmnet)
+#library(tensorflow)
+library(caret)
+```
+
+```{r}
+df <- read.csv("/Users/nivinattudurai/Downloads/alzheimer_data.csv")
+df_orig <- df
+```
+
+
+Mutate diagnosis into 2 binomial categories, gender into factor variable
+
+```{r}
+df_orig <- df_orig %>% 
+  mutate(diagnosis = as.factor(diagnosis))
+```
+
+
+```{r}
+df <- df %>% 
+  mutate(diag = ifelse(diagnosis %in% c(1, 2), "1", "0"),
+         diag = as.factor(diag))
+```
+
+```{r}
+df <- df %>%
+  mutate(female=as.factor(female))
+```
+
+
+Inital model -> CHANGED VARIABLES
+
+```{r}
+logistic_model <- glm(diag ~ age + female + educ + animals + anxsev + remdates, family=binomial, data=df)
+#summary(logistic_model)
+
+logistic_model %>%
+  tbl_regression(estimate_fun = function(x) style_number(x, digits = 3), exponentiate = TRUE)
+
+data_split <- initial_split(df, prop = 0.7) 
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+pred_prob <- logistic_model %>% 
+  predict(test_data,type="response")
+
+predicted.classes <- ifelse(pred_prob > 0.5, "1", "0")
+accuracy <- mean(predicted.classes == test_data$diag)
+accuracy
+
+
+```
+
+
+Model Fitting/LASSO
+
+```{r}
+
+#df2 <-
+#  df %>%
+#  select(educ, animals, trailb, memunits, naccmmse, anxsev, female, age, diag)
+
+#df2 <- df2 %>% 
+#  mutate_if(is.character, as.factor)
+
+#df2 <- df2 %>%
+#  mutate(female=as.numeric(female))
+
+df_orig_2 <-
+  df_orig %>%
+  select(educ, animals, trailb, memunits, naccmmse, anxsev, female, age, diagnosis)
+
+df_orig_2 <- df_orig_2 %>% 
+  mutate_if(is.character, as.factor)
+
+df_orig_2 <- df_orig_2 %>%
+  mutate(female=as.numeric(female))
+
+
+#fit2_bn = glmnet(df2, df2$diag, family='binomial', alpha=1, lambda = 6.702106e-09)
+fit2_mn = glmnet(df_orig_2, df_orig_2$diagnosis, family='multinomial', alpha=1, lambda = 6.702106e-09)
+
+min(fit2_mn$lambda)
+coef(fit2_mn)
+
+```
+
+Split data cross validation
+
+```{r}
+set.seed(1234)
+logistic_model3 <- glm(diag ~ educ + animals + trailb + memunits + naccmmse + anxsev + female + age, family=binomial, data=df) 
+logistic_model3 %>%
+ tbl_regression(estimate_fun = function(x) style_number(x, digits = 3), exponentiate = TRUE)
+
+
+data_split <- initial_split(df, prop = 0.7) 
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+pred_prob <- logistic_model3  %>% 
+  predict(test_data,type="response")
+
+predicted.classes <- ifelse(pred_prob > 0.5, "1", "0")
+accuracy <- mean(predicted.classes == test_data$diag)
+accuracy
+```
+
+K-fold cross validation
+
+```{r}
+set.seed(1234)
+train_control <- trainControl(method = "cv",
+                              number = 5)
+
+k_model <- train(diag ~ ., data=df, 
+                method="glm", 
+                family=binomial, 
+                trControl=train_control)
+print(k_model)
+```
+
+
+Neural Network
+
+```{r}
+#B = df2[1,7]
+
+#max.B=apply(B,2,max)
+#min.B=apply(B,2,min)
+
+#B.normalized=as.data.frame(scale(B,center=min.B,scale=max.B-min.B))
+#apply(B.normalized,2,range)
+```
+
+
+```{r}
+B = df_orig_2[1:8]
+
+max.B=apply(B,2,max)
+min.B=apply(B,2,min)
+
+B.normalized=as.data.frame(scale(B,center=min.B,scale=max.B-min.B))
+apply(B.normalized,2,range)
+df3 <- df_orig_2
+df3[1:8] <- B.normalized
+df3
+
+```
+
+
+```{r}
+set.seed(1234)
+data_split <- initial_split(df3, prop = 0.7) 
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+#train_data
+
+model = neuralnet(
+    diagnosis ~ educ + animals + trailb + memunits + naccmmse + age + female + anxsev,
+data=train_data,
+hidden=c(5,2),
+linear.output = FALSE,
+stepmax=1e10)
+```
+
+```{r}
+plot(model,rep = "best")
+
+pred <- predict(model, test_data)
+labels <- c("0", "1", "2")
+prediction_label <- data.frame(max.col(pred)) %>%     
+mutate(pred=labels[max.col.pred.]) %>%
+select(2) %>%
+unlist()
+
+table(test_data$diagnosis, prediction_label)
+```
+
+```{r}
+library(beepr)
+library(devtools)
+#devtools::install_github('araastat/reprtree')
+library(reprtree)
+library(party)
+```
+
+
+```{r}
+check = as.numeric(test_data$diag) == max.col(pred)
+accuracy = (sum(check)/nrow(test_data))*100
+print(accuracy)
+beep()
+```
+
+Random Forest
+
+```{r}
+set.seed(1234)
+alz.forest<-randomForest(diagnosis~.,data=train_data,importance=TRUE,proximity=TRUE)
+p<-predict(alz.forest,test_data)
+confusionMatrix(p,test_data$diagnosis)
+```
+
+```{r}
+varImpPlot(alz.forest,
+           sort = T,
+           n.var = 5,
+           main = "Top 5 - Variable Importance")
+importance(alz.forest)
+#reprtree:::plot.getTree(alz.forest)
+#model2 = ctree(diagnosis ~ educ, data=train_data)
+#plot(model2, type="simple")
+
+```
+
+```{r}
+results_df <- data.frame(Model=c("GLM Split (B)", "GLM K-fold (B)", "Neural Net (B)", "Neural Net (M)", "Random Forest (M)"),
+                acc=c(0.8594, 0.88, 0.9001, 0.7818, 0.7657))
+
+p<-ggplot(data=results_df, aes(x=Model, y=acc, fill=Model)) +
+  geom_bar(stat="identity", width=0.7) +
+  xlab("Models") +
+  ylab("Accuracy") + theme_classic() +
+  geom_text(aes(label=acc), vjust=1.6, color="white",
+            position = position_dodge(0.9))
+  
+p
+```
+
